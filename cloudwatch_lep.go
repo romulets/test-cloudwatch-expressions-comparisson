@@ -1,4 +1,4 @@
-package main
+package cloudwatch_lep
 
 import (
 	"fmt"
@@ -16,7 +16,7 @@ func cleanExpression(exp string) string {
 	return exp
 }
 
-func compareExpressions(strA, strB string) bool {
+func CompareExpressions(strA, strB string) bool {
 	strA = cleanExpression(strA)
 	strB = cleanExpression(strB)
 

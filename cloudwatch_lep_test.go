@@ -1,6 +1,9 @@
-package main
+package cloudwatch_lep_test
 
-import "testing"
+import (
+	cloudwatch_lep "github.com/romulets/test-cloudwatch-expressions-comparisson"
+	"testing"
+)
 
 func TestCompareExpressions(t *testing.T) {
 	cases := map[string]struct {
@@ -161,7 +164,7 @@ func TestCompareExpressions(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			if compareExpressions(tc.expA, tc.expB) == tc.shouldMatch {
+			if cloudwatch_lep.CompareExpressions(tc.expA, tc.expB) == tc.shouldMatch {
 				return
 			}
 

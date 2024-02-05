@@ -2,9 +2,10 @@ package cloudwatch_lep
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 )
+
+const maxDepth = 5
 
 type logicalOperator string
 type comparisonOperator string
@@ -120,64 +121,51 @@ func areCloudWatchExpressionsEquivalent(a, b string) (bool, error) {
 }
 
 func parse(s string) (expression, error) {
-	// remove trailling spaces and { }
+	// remove trailing spaces and { }
 	cleanS := strings.TrimSpace(strings.TrimRight(strings.TrimLeft(strings.TrimSpace(s), "{"), "}"))
+
+	if strings.Count(s, "(") != strings.Count(s, ")") {
+		return nil, errors.New("broken parenthesis")
+	}
+
 	return safeParse(cleanS, 0)
 }
 
 func safeParse(s string, depth int) (expression, error) {
-	if depth > 2 {
-		return simpleExpression{}, fmt.Errorf("max depth reached (%d), won't parse anymore", depth)
+	if depth > maxDepth {
+		return nil, errors.New("max depth reached, can't parse this expression")
 	}
+
+	var logicalOp logicalOperator
+	expressions := make([]expression, 0, 10)
 
 	buf := strings.Builder{}
 	buf.Grow(len(s))
-	parenthesisAcc := 0
 
-	var logicalOp logicalOperator
-	expressions := make([]expression, 0, len(s))
-	isInsideSubExp := false
+	pointer := 0
+	for len(s) > pointer {
+		r := rune(s[pointer])
+		i := pointer
+		pointer++
 
-	for i, r := range s {
-		if r == '(' {
-			parenthesisAcc++
-			if parenthesisAcc > 1 {
-				isInsideSubExp = true
+		if r == '(' { // If it's a parenthesis opening, resolve the parenthesis
+			pos := matchingParenthesisPos(s[i:])
+			if pos < 0 {
+				return nil, errors.New("broken parenthesis")
 			}
-			if parenthesisAcc > 3 {
-				return simpleExpression{}, errors.New("not supported more than 2 nested parenthesis")
+
+			subS := s[i+1 : pos+i]
+			exp, err := safeParse(subS, depth+1)
+			if err != nil {
+				return nil, err
 			}
+			expressions = append(expressions, exp)
+			pointer = pos + i + 1 // move pointer to the end of what has been already processed
 			continue
 		}
 
-		if r == ')' {
-			parenthesisAcc--
-			if parenthesisAcc < 0 {
-				return simpleExpression{}, errors.New("broken parenthesis")
-			}
-			continue
-		}
+		buf.WriteRune(r)
 
-		// it's in the middle of another expression, so we just add to
-		// the buffer until we find the end of this sub expression
-		if isInsideSubExp {
-			buf.WriteRune(r)
-
-			// Sub expression completed!
-			if parenthesisAcc == 0 {
-				expStr := buf.String()
-				exp, err := safeParse(expStr, depth+1)
-				if err != nil {
-					return simpleExpression{}, err
-				}
-
-				expressions = append(expressions, exp)
-				buf.Reset()
-				buf.Grow(len(s) - i)
-				isInsideSubExp = false
-			}
-			continue
-		}
 		tmpString := buf.String()
 		if contains, op := hasSuffixLogicalOp(tmpString); contains {
 			if logicalOp == "" {
@@ -185,16 +173,15 @@ func safeParse(s string, depth int) (expression, error) {
 			}
 
 			if logicalOp != op {
-				return simpleExpression{}, errors.New("not supported comparison with alternating logical operators")
+				return nil, errors.New("not supported comparison with alternating logical operators")
 			}
 
-			exprStr := strings.TrimSuffix(tmpString, string(op))
-
-			// if the length is zero it means we had an already processed complex  expressions (between parenthesis)
-			if len(exprStr) > 0 {
-				exp, err := safeParse(exprStr, depth+1)
+			expStr := strings.TrimSpace(strings.TrimSuffix(tmpString, string(op)))
+			// if the length is zero it means we had an already processed complex expressions (between parenthesis)
+			if len(expStr) > 0 {
+				exp, err := parseSimpleStatement(expStr)
 				if err != nil {
-					return simpleExpression{}, err
+					return nil, err
 				}
 
 				expressions = append(expressions, exp)
@@ -203,23 +190,42 @@ func safeParse(s string, depth int) (expression, error) {
 			buf.Reset()
 			buf.Grow(len(s) - i)
 		}
-
-		buf.WriteRune(r)
 	}
 
-	if len(expressions) == 0 { // it's a simple expression!
-		return parseSimpleStatement(s)
-	}
-
-	if buf.Len() > 0 {
-		exp, err := safeParse(buf.String(), depth+1)
+	expStr := strings.TrimSpace(buf.String())
+	if len(expStr) > 0 {
+		exp, err := parseSimpleStatement(expStr)
 		if err != nil {
-			return simpleExpression{}, err
+			return nil, err
 		}
+
 		expressions = append(expressions, exp)
 	}
 
+	if len(expressions) == 1 { // unwrap simple expressions
+		return expressions[0], nil
+	}
+
 	return complexExpression{operator: logicalOp, expressions: expressions}, nil
+}
+
+func matchingParenthesisPos(s string) int {
+	parenthesisStack := 0
+	for i, r := range s {
+		if r == '(' {
+			parenthesisStack++
+		}
+
+		if r == ')' {
+			parenthesisStack--
+		}
+
+		if parenthesisStack == 0 {
+			return i
+		}
+	}
+
+	return -1
 }
 
 func parseSimpleStatement(s string) (expression, error) {
@@ -239,7 +245,7 @@ func parseSimpleStatement(s string) (expression, error) {
 		tmpString := buf.String()
 		if contains, op := hasSuffixComparisonOp(tmpString); contains {
 			if foundOp {
-				return simpleExpression{}, errors.New("got multiple comparison operators")
+				return nil, errors.New("got multiple comparison operators")
 			}
 
 			left = strings.TrimSpace(strings.TrimSuffix(tmpString, string(op)))
@@ -251,7 +257,7 @@ func parseSimpleStatement(s string) (expression, error) {
 	}
 
 	if !foundOp {
-		return simpleExpression{}, errors.New("could not find a operator for this expression")
+		return nil, errors.New("could not find a operator for this expression")
 	}
 
 	// Trim trailing spaces and )

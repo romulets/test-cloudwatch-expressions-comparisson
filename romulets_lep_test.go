@@ -41,7 +41,7 @@ func TestParse(t *testing.T) {
 			out: se("$.eventName", coEqual, "DeleteGroupPolicy"),
 		},
 		"simple expression with multiple parenthesis": {
-			in:  "{(($.eventName=DeleteGroupPolicy))}",
+			in:  "{(((($.eventName=DeleteGroupPolicy))))}",
 			out: se("$.eventName", coEqual, "DeleteGroupPolicy"),
 		},
 		"simple expression with parenthesis and spaces": {
@@ -51,22 +51,21 @@ func TestParse(t *testing.T) {
 		"error on broken parenthesis and spaces": {
 			in:  "{   (   $.eventName  =   DeleteGroupPolicy ))   }",
 			err: errors.New("broken parenthesis"),
-			out: simpleExpression{},
 		},
 		"error on double operators (double equals)": {
 			in:  "{   $.eventName == a }",
 			err: errors.New("got multiple comparison operators"),
-			out: simpleExpression{},
+			out: nil,
 		},
 		"error on double operators (different and equals)": {
 			in:  "{   $.eventName !== a }",
 			err: errors.New("got multiple comparison operators"),
-			out: simpleExpression{},
+			out: nil,
 		},
 		"error on double operators (after expression)": {
 			in:  "{   $.eventName != a !=}",
 			err: errors.New("got multiple comparison operators"),
-			out: simpleExpression{},
+			out: nil,
 		},
 		"complex expression 2 expressions": {
 			in: "{$.userIdentity.type = \"Root\" && $.userIdentity.invokedBy NOT EXISTS}",
@@ -120,18 +119,29 @@ func TestParse(t *testing.T) {
 		"error on complex expression alternating logical operators": {
 			in:  "{($.eventSource = kms.amazonaws.com) && ($.eventName=DisableKey) || ($.eventName=ScheduleKeyDeletion)}",
 			err: errors.New("not supported comparison with alternating logical operators"),
-			out: simpleExpression{},
+			out: nil,
 		},
 		"4 layers deep expression": {
-			in:  "{((a=b) && ((a=b) || ((a=b) && (a!=b || (a=b)))))}",
-			err: errors.New("not supported more than 2 nested parenthesis"),
-			out: simpleExpression{},
+			in: "{((a=b) && ((c=d) || ((e=f) && (g!=h || (i=j)))))}",
+			out: ce("&&",
+				se("a", coEqual, "b"),
+				ce("||",
+					se("c", coEqual, "d"),
+					ce("&&",
+						se("e", coEqual, "f"),
+						ce("||",
+							se("g", coNotEqual, "h"),
+							se("i", coEqual, "j"),
+						),
+					),
+				),
+			),
 		},
-		//"too deep expression": {
-		//	in:  "{((((((((((((a=b)&&(a=b))&&(a=b))&&(a=b))&&(a=b))&&(a=b))&&(a=b))&&(a=b))&&(a=b))&&(a=b))&&(a=b))&&(a=b))}",
-		//	err: errors.New("not supported comparison with alternating logical operators"),
-		//	out: simpleExpression{},
-		//},
+		"error on too deep expression": {
+			in:  "{((((((((((((a=b)&&(a=b))&&(a=b))&&(a=b))&&(a=b))&&(a=b))&&(a=b))&&(a=b))&&(a=b))&&(a=b))&&(a=b))&&(a=b))}",
+			err: errors.New("max depth reached, can't parse this expression"),
+			out: nil,
+		},
 	}
 
 	for name, tc := range cases {
@@ -489,6 +499,16 @@ func TestAreCloudWatchExpressionsEquivalent(t *testing.T) {
 			require.Equal(t, tc.err, err)
 			require.Equal(t, areEquivalent, tc.shouldBeEquivalent)
 		})
+	}
+}
+
+func BenchmarkAreCloudWatchExpressionsEquivalent(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		equivalent, err := areCloudWatchExpressionsEquivalent(
+			"{ ($.eventSource = organizations.amazonaws.com) && (($.eventName = \"AttachPolicy\") || ($.eventName = \"CreateAccount\") || ($.eventName = \"CreateOrganizationalUnit\") || ($.eventName = \"CreatePolicy\") || ($.eventName = \"DeclineHandshake\") || ($.eventName = \"DeleteOrganization\") || ($.eventName = \"DeleteOrganizationalUnit\") || ($.eventName = \"DeletePolicy\") || ($.eventName = \"DetachPolicy\") || ($.eventName = \"DisablePolicyType\") || ($.eventName = \"EnablePolicyType\") || ($.eventName = \"InviteAccountToOrganization\") || ($.eventName = \"LeaveOrganization\") || ($.eventName = \"MoveAccount\") || ($.eventName = \"RemoveAccountFromOrganization\") || ($.eventName = \"AcceptHandshake\") ||  ($.eventName = \"UpdatePolicy\") || ($.eventName = \"UpdateOrganizationalUnit\")) }",
+			"{ (($.eventName = \"AcceptHandshake\") || ($.eventName = \"AttachPolicy\") || ($.eventName = \"CreateAccount\") || ($.eventName = \"CreateOrganizationalUnit\") || ($.eventName = \"CreatePolicy\") || ($.eventName = \"DeclineHandshake\") || ($.eventName = \"DeleteOrganization\") || ($.eventName = \"DeleteOrganizationalUnit\") || ($.eventName = \"DeletePolicy\") || ($.eventName = \"DetachPolicy\") || ($.eventName = \"DisablePolicyType\") || ($.eventName = \"EnablePolicyType\") || ($.eventName = \"InviteAccountToOrganization\") || ($.eventName = \"LeaveOrganization\") || ($.eventName = \"MoveAccount\") || ($.eventName = \"RemoveAccountFromOrganization\") || ($.eventName = \"UpdatePolicy\") || ($.eventName = \"UpdateOrganizationalUnit\")) && (organizations.amazonaws.com = $.eventSource)}")
+		require.NoError(b, err)
+		require.True(b, equivalent)
 	}
 }
 
